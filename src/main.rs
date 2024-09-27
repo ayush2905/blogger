@@ -23,6 +23,64 @@ struct FlashData {
     message: String,
 }
 
+#[get("/")]
+async fn new(
+    data: web::Data<AppState>
+) -> Result<HttpResponse, Error> {
+    let template = &data.templates;
+    let ctx = tera::Context::new();
+
+    let body = template.render("new.html.tera", &ctx)
+                        .map_err(|_| error::ErrorInternalServerError("Template Error"))?;
+
+    Ok(HttpResponse::Ok().content_type("text/html").body(body))
+}
+
+#[get("/{id}")]
+async fn edit(
+    data: web::Data<AppState>, id: web::Path<i32>
+) -> Result<HttpResponse, Error> {
+    let conn = &data.conn;
+    let template = &data.templates;
+    let post: post::Model = Post::find_by_id(id.into_inner()).one(conn).await.expect("Could not find the post").unwrap();
+
+    let mut ctx = tera::Context::new();
+    ctx.insert("post", &post);
+
+    let body = template.render("edit.html.tera", &ctx)
+                        .map_err(|_| error::ErrorInternalServerError("Template Error"))?;
+
+    Ok(HttpResponse::Ok().content_type("text/html").body(body))
+}
+
+#[post("/{id}")]
+async fn update()
+
+#[post("/")]
+async fn create(
+    data: web::Data<AppState>,
+    post_form: web::Form<post::Model>,
+) -> actix_flash::Response<HttpResponse, FlashData> {
+    let conn = &data.conn;
+    let form = post_form.into_inner();
+
+    post::ActiveModel {
+        title: Set(form.title.to_owned()),
+        text: Set(form.text.to_owned()),
+        ..Default::default()
+    }
+    .save(conn)
+    .await
+    .expect("Could not insert post");
+
+    let flash = FlashData {
+        kind: "success".to_owned(),
+        message: "Post successfully added".to_owned(),
+    };
+
+    actix_flash::Response::with_redirect(flash, "/");
+}
+
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     std::env::set_var("RUST_LOG","debug");
