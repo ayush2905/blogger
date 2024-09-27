@@ -1,3 +1,4 @@
+use actix_files as fs;
 use std::env;
 use actix_web::{
     error, get, middleware, post, web, App, Error, HttpRequest, HttpResponse, HttpServer, Result
@@ -36,7 +37,28 @@ async fn main() -> std::io::Result<()> {
 
     let conn = sea_orm::Database::connect(&db_url).await.unwrap();
 
+    Migrator::up(&conn, None).await.unwrap();
+    let templates = Tera::new(concat!(env!("CARGO_MANIFEST_DIR"), "/templates/**/*")).unwrap();
 
+    let state = AppState {templates, conn};
+    let mut listenfd = ListenFd::from_env();
+    let mut server = HttpServer::new(move || {
+        App::new()
+        .data(state.clone())
+        .wrap(middleware::Logger::default())
+        .wrap(actix_flash::Flash::default())
+        .configure(init)
+        .service(fs::Files::new("/static", "./static").show_files_listing())
+    });
+
+    server = match listenfd.take_tcp_listener(0)? {
+        Some(listener) => server.listen(listener)?,
+        None => server.bind(&server_url)?,
+    };
+
+    println!("Started the server at {}", server_url);
+    server.run().await?;
+    Ok(())
 }
 
 pub fn init(cfg: &mut web::ServiceConfig) {
