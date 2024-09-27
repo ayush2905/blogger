@@ -36,6 +36,11 @@ async fn new(
     Ok(HttpResponse::Ok().content_type("text/html").body(body))
 }
 
+#[get("/")]
+async fn list() -> {
+    
+}
+
 #[get("/{id}")]
 async fn edit(
     data: web::Data<AppState>, id: web::Path<i32>
@@ -55,6 +60,11 @@ async fn edit(
 
 #[post("/{id}")]
 async fn update()
+
+#[post("/delete/{id}")]
+async fn delete() -> {
+
+}
 
 #[post("/")]
 async fn create(
