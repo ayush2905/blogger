@@ -1,39 +1,35 @@
 use actix_files as fs;
-use std::env;
 use actix_web::{
-    error, get, middleware, post, web, App, Error, HttpRequest, HttpResponse, HttpServer, Result
-}
+    error, get, middleware, post, web, App, Error, HttpRequest, HttpResponse, HttpServer, Result,
+};
+
+use entity::post;
+use entity::post::Entity as Post;
+use listenfd::ListenFd;
+use migration::{Migrator, MigratorTrait};
+use sea_orm::DatabaseConnection;
+use sea_orm::{entity::*, query::*};
 use serde::{Deserialize, Serialize};
+use std::env;
 use tera::Tera;
+
+const DEFAULT_POSTS_PER_PAGE: u64 = 5;
 
 #[derive(Debug, Clone)]
 struct AppState {
     templates: tera::Tera,
     conn: DatabaseConnection,
 }
-
+#[derive(Debug, Deserialize)]
 pub struct Params {
     page: Option<u64>,
     posts_per_page: Option<u64>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 struct FlashData {
     kind: String,
     message: String,
-}
-
-#[get("/")]
-async fn new(
-    data: web::Data<AppState>
-) -> Result<HttpResponse, Error> {
-    let template = &data.templates;
-    let ctx = tera::Context::new();
-
-    let body = template.render("new.html.tera", &ctx)
-                        .map_err(|_| error::ErrorInternalServerError("Template Error"))?;
-
-    Ok(HttpResponse::Ok().content_type("text/html").body(body))
 }
 
 #[get("/")]
@@ -76,69 +72,14 @@ async fn list(
     Ok(HttpResponse::Ok().content_type("text/html").body(body))
 }
 
-#[get("/{id}")]
-async fn edit(
-    data: web::Data<AppState>, id: web::Path<i32>
-) -> Result<HttpResponse, Error> {
-    let conn = &data.conn;
+#[get("/new")]
+async fn new(data: web::Data<AppState>) -> Result<HttpResponse, Error> {
     let template = &data.templates;
-    let post: post::Model = Post::find_by_id(id.into_inner()).one(conn).await.expect("Could not find the post").unwrap();
-
-    let mut ctx = tera::Context::new();
-    ctx.insert("post", &post);
-
-    let body = template.render("edit.html.tera", &ctx)
-                        .map_err(|_| error::ErrorInternalServerError("Template Error"))?;
-
+    let ctx = tera::Context::new();
+    let body = template
+        .render("new.html.tera", &ctx)
+        .map_err(|_| error::ErrorInternalServerError("Template error"))?;
     Ok(HttpResponse::Ok().content_type("text/html").body(body))
-}
-
-#[post("/{id}")]
-async fn update(
-    data: web::Data<AppState>,
-    id: web:Path<i32>,
-    post_form: web:Form<post::Model>
-) -> actix_flash::Response<HttpResponse, FlashData> {
-    let conn = &data.conn;
-    let form = post_form.into_inner();
-
-    post::ActiveModel {
-        id: Set(id.into_inner()),
-        title: Set(form.title.to_owned()),
-        text: Set(form.text.to_owned())
-    }
-    .save(conn)
-    .await
-    .expect("Could not edit post");
-
-    let flash = FlashData {
-        kind: "success".to_owned(),
-        message: "Post successfully updated".to_owned()
-    };
-
-    actix_flash::Response::with_redirect(flash, "/")
-}
-
-#[post("/delete/{id}")]
-async fn delete(
-    data: web::Data<AppState>,
-    id: web:Path<i32>,
-) -> actix_flash::Response<HttpResponse, FlashData> {
-    let conn = &data.conn;
-    let post: post::ActiveModel = Post::find_by_id(id.into_inner())
-                                    .one(conn)
-                                    .await
-                                    .unwrap()
-                                    .unwrap()
-                                    .into();
-    post.delete(conn).await.unwrap();
-
-    let flash = FlashData {
-        kind: "success".to_owned(),
-        message: "Post successfully deleted".to_owned()
-    };
-
-    actix_flash::Response::with_redirect(flash, "/")
 }
 
 #[post("/")]
@@ -147,6 +88,7 @@ async fn create(
     post_form: web::Form<post::Model>,
 ) -> actix_flash::Response<HttpResponse, FlashData> {
     let conn = &data.conn;
+
     let form = post_form.into_inner();
 
     post::ActiveModel {
@@ -156,42 +98,112 @@ async fn create(
     }
     .save(conn)
     .await
-    .expect("Could not insert post");
+    .expect("could not insert post");
 
     let flash = FlashData {
         kind: "success".to_owned(),
-        message: "Post successfully added".to_owned(),
+        message: "Post successfully added.".to_owned(),
     };
 
-    actix_flash::Response::with_redirect(flash, "/");
+    actix_flash::Response::with_redirect(flash, "/")
+}
+
+#[get("/{id}")]
+async fn edit(data: web::Data<AppState>, id: web::Path<i32>) -> Result<HttpResponse, Error> {
+    let conn = &data.conn;
+    let template = &data.templates;
+
+    let post: post::Model = Post::find_by_id(id.into_inner())
+        .one(conn)
+        .await
+        .expect("could not find post")
+        .unwrap();
+
+    let mut ctx = tera::Context::new();
+    ctx.insert("post", &post);
+
+    let body = template
+        .render("edit.html.tera", &ctx)
+        .map_err(|_| error::ErrorInternalServerError("Template error"))?;
+    Ok(HttpResponse::Ok().content_type("text/html").body(body))
+}
+
+#[post("/{id}")]
+async fn update(
+    data: web::Data<AppState>,
+    id: web::Path<i32>,
+    post_form: web::Form<post::Model>,
+) -> actix_flash::Response<HttpResponse, FlashData> {
+    let conn = &data.conn;
+    let form = post_form.into_inner();
+
+    post::ActiveModel {
+        id: Set(id.into_inner()),
+        title: Set(form.title.to_owned()),
+        text: Set(form.text.to_owned()),
+    }
+    .save(conn)
+    .await
+    .expect("could not edit post");
+
+    let flash = FlashData {
+        kind: "success".to_owned(),
+        message: "Post successfully updated.".to_owned(),
+    };
+
+    actix_flash::Response::with_redirect(flash, "/")
+}
+
+#[post("/delete/{id}")]
+async fn delete(
+    data: web::Data<AppState>,
+    id: web::Path<i32>,
+) -> actix_flash::Response<HttpResponse, FlashData> {
+    let conn = &data.conn;
+
+    let post: post::ActiveModel = Post::find_by_id(id.into_inner())
+        .one(conn)
+        .await
+        .unwrap()
+        .unwrap()
+        .into();
+
+    post.delete(conn).await.unwrap();
+
+    let flash = FlashData {
+        kind: "success".to_owned(),
+        message: "Post successfully deleted.".to_owned(),
+    };
+
+    actix_flash::Response::with_redirect(flash, "/")
 }
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    std::env::set_var("RUST_LOG","debug");
+    std::env::set_var("RUST_LOG", "debug");
     tracing_subscriber::fmt::init();
+
+    // get env vars
     dotenv::dotenv().ok();
+    let db_url = env::var("DATABASE_URL").expect("DATABASE_URL is not set in .env file");
+    let host = env::var("HOST").expect("HOST is not set in .env file");
+    let port = env::var("PORT").expect("PORT is not set in .env file");
+    let server_url = format!("{}:{}", host, port);
 
-    let db_url = env::var("DATABASE_URL").expect("DATABASE_URL is not set in the .env file");
-    let port = env::var("PORT").expect("PORT is not set in the .env file");
-    let host = env::var("HOST").expect("HOST is not set in the .env file");
-
-    let server_url = format!("{}:{}", host, port)
-
+    // create post table if not exists
     let conn = sea_orm::Database::connect(&db_url).await.unwrap();
-
     Migrator::up(&conn, None).await.unwrap();
     let templates = Tera::new(concat!(env!("CARGO_MANIFEST_DIR"), "/templates/**/*")).unwrap();
+    let state = AppState { templates, conn };
 
-    let state = AppState {templates, conn};
     let mut listenfd = ListenFd::from_env();
     let mut server = HttpServer::new(move || {
         App::new()
-        .data(state.clone())
-        .wrap(middleware::Logger::default())
-        .wrap(actix_flash::Flash::default())
-        .configure(init)
-        .service(fs::Files::new("/static", "./static").show_files_listing())
+            .data(state.clone())
+            .wrap(middleware::Logger::default()) // enable logger
+            .wrap(actix_flash::Flash::default())
+            .configure(init)
+            .service(fs::Files::new("/static", "./static").show_files_listing())
     });
 
     server = match listenfd.take_tcp_listener(0)? {
@@ -199,8 +211,9 @@ async fn main() -> std::io::Result<()> {
         None => server.bind(&server_url)?,
     };
 
-    println!("Started the server at {}", server_url);
+    println!("Starting server at {}", server_url);
     server.run().await?;
+
     Ok(())
 }
 
